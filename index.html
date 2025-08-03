@@ -102,7 +102,6 @@
             <div class="header">Human Sounds</div>
             <button id="record-button">Press to record</button>
             <div id="error-message"></div>
-            <audio id="audioPlayback" controls></audio>
         </div>
     </div>
     <div id="modal" class="modal">
@@ -122,7 +121,17 @@
         const modal = document.getElementById('modal');
         const countdownEl = document.getElementById('countdown');
         const errorMessage = document.getElementById('error-message');
-        const audioPlayback = document.getElementById('audioPlayback');
+
+        // Function to play a beep sound
+        function playBeep() {
+            const audioContext = new AudioContext();
+            const oscillator = audioContext.createOscillator();
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(440, audioContext.currentTime); // 440Hz
+            oscillator.connect(audioContext.destination);
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + 0.5); // 0.5-second beep
+        }
 
         // Handle bat sound buttons
         document.querySelectorAll('.bat-button').forEach(button => {
@@ -157,6 +166,7 @@
         function startRecording() {
             navigator.mediaDevices.getUserMedia({ audio: true })
                 .then(stream => {
+                    playBeep(); // Play beep when recording starts
                     mediaRecorder = new MediaRecorder(stream);
                     mediaRecorder.start();
                     audioChunks = [];
@@ -166,21 +176,21 @@
                     mediaRecorder.onstop = () => {
                         const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
                         const audioURL = URL.createObjectURL(audioBlob);
-                        audioPlayback.src = audioURL;
-                        audioPlayback.addEventListener('canplay', () => {
+                        const audio = new Audio(audioURL);
+                        audio.addEventListener('canplay', () => {
                             countdownEl.textContent = 'Playing recording...';
-                            drawSonogram(audioPlayback, document.getElementById('recording-sonogram'));
+                            drawSonogram(audio, document.getElementById('recording-sonogram'));
                         }, { once: true });
                         stopButton.style.display = 'none';
                         closeModalButton.style.display = 'block';
                     };
-                    // Auto-stop after 3 seconds
+                    // Auto-stop after 5 seconds
                     setTimeout(() => {
                         if (mediaRecorder.state === 'recording') {
                             mediaRecorder.stop();
                             stream.getTracks().forEach(track => track.stop());
                         }
-                    }, 3000);
+                    }, 5000);
                 })
                 .catch(err => {
                     countdownEl.textContent = '';
@@ -198,13 +208,14 @@
             }
         });
 
-        // Close modal
+        // Close modal and reset sonogram
         closeModalButton.addEventListener('click', () => {
             modal.style.display = 'none';
             countdownEl.textContent = '';
             closeModalButton.style.display = 'none';
-            audioPlayback.pause();
-            audioPlayback.currentTime = 0;
+            const recordingCanvas = document.getElementById('recording-sonogram');
+            const ctx = recordingCanvas.getContext('2d');
+            ctx.clearRect(0, 0, recordingCanvas.width, recordingCanvas.height); // Clear sonogram
         });
 
         // Draw sonogram
@@ -221,6 +232,9 @@
             const ctx = canvas.getContext('2d');
             const width = canvas.width;
             const height = canvas.height;
+
+            // Clear canvas before drawing
+            ctx.clearRect(0, 0, width, height);
 
             function draw() {
                 const animationId = requestAnimationFrame(draw);
