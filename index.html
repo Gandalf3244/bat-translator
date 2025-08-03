@@ -1,43 +1,4 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -48,18 +9,23 @@
             background: linear-gradient(to bottom, #ccc, #999);
             font-family: Arial, sans-serif;
             text-align: center;
+            margin: 0;
+            padding: 20px;
         }
         h1 {
             color: black;
             font-weight: bold;
+            margin-bottom: 20px;
         }
         .container {
             display: flex;
             justify-content: space-around;
-            margin-top: 20px;
+            flex-wrap: wrap;
         }
         .left, .right {
             width: 45%;
+            min-width: 300px;
+            margin: 10px;
         }
         .header {
             background: black;
@@ -75,6 +41,7 @@
             border: none;
             border-radius: 50px;
             cursor: pointer;
+            font-size: 16px;
         }
         #record-button {
             width: 150px;
@@ -102,6 +69,7 @@
             padding: 20px;
             border: 1px solid #888;
             width: 80%;
+            max-width: 600px;
             text-align: center;
         }
         #stop-recording, #close-modal {
@@ -111,8 +79,13 @@
             display: none;
         }
         canvas {
-            margin-top: 20px;
             border: 1px solid black;
+            margin: 10px auto;
+            display: block;
+        }
+        #error-message {
+            color: red;
+            margin: 10px;
         }
     </style>
 </head>
@@ -123,77 +96,49 @@
             <div class="header">Bat Sounds</div>
             <button class="bat-button" data-sound="fighting.mp3">Fighting</button>
             <button class="bat-button" data-sound="feeding.mp3">Feeding</button>
-            <canvas id="bat-sonogram" width="600" height="200"></canvas>
+            <canvas id="bat-sonogram" width="512" height="256"></canvas>
         </div>
         <div class="right">
             <div class="header">Human Sounds</div>
             <button id="record-button">Press to record</button>
+            <div id="error-message"></div>
+            <audio id="audioPlayback" controls></audio>
         </div>
     </div>
     <div id="modal" class="modal">
         <div class="modal-content">
             <span id="countdown"></span>
+            <canvas id="recording-sonogram" width="512" height="256"></canvas>
             <button id="stop-recording">Stop Recording</button>
-            <canvas id="recording-sonogram" width="600" height="200"></canvas>
             <button id="close-modal">Close</button>
         </div>
     </div>
     <script>
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let mediaRecorder;
+        let audioChunks = [];
+        const recordButton = document.getElementById('record-button');
+        const stopButton = document.getElementById('stop-recording');
+        const closeModalButton = document.getElementById('close-modal');
+        const modal = document.getElementById('modal');
+        const countdownEl = document.getElementById('countdown');
+        const errorMessage = document.getElementById('error-message');
+        const audioPlayback = document.getElementById('audioPlayback');
 
-        function drawSonogram(audioElement, canvas) {
-            const canvasCtx = canvas.getContext('2d');
-            const source = audioCtx.createMediaElementSource(audioElement);
-            const analyser = audioCtx.createAnalyser();
-            analyser.fftSize = 2048;
-            source.connect(analyser);
-            analyser.connect(audioCtx.destination);
-            const bufferLength = analyser.frequencyBinCount;
-            const dataArray = new Float32Array(bufferLength);
-            let x = 0;
-
-            function draw() {
-                const animationId = requestAnimationFrame(draw);
-                analyser.getFloatFrequencyData(dataArray);
-                canvasCtx.fillStyle = 'rgb(200, 200, 200)';
-                canvasCtx.fillRect(x, 0, 1, canvas.height);
-
-                for (let y = 0; y < canvas.height; y++) {
-                    const index = Math.floor(y / canvas.height * bufferLength);
-                    const value = dataArray[index];
-                    const percent = (value + 100) / 100; // Normalize
-                    const hue = 240 - (percent * 240); // Blue to red
-                    canvasCtx.fillStyle = `hsl(${hue}, 100%, 50%)`;
-                    canvasCtx.fillRect(x, canvas.height - y, 1, 1);
-                }
-                x++;
-                if (x >= canvas.width || audioElement.ended) {
-                    cancelAnimationFrame(animationId);
-                }
-            }
-            audioElement.play();
-            canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-            draw();
-        }
-
+        // Handle bat sound buttons
         document.querySelectorAll('.bat-button').forEach(button => {
             button.addEventListener('click', () => {
                 const sound = button.getAttribute('data-sound');
                 const audio = new Audio(sound);
                 const canvas = document.getElementById('bat-sonogram');
-                drawSonogram(audio, canvas);
+                audio.addEventListener('canplay', () => {
+                    drawSonogram(audio, canvas);
+                }, { once: true });
             });
         });
 
-        const recordButton = document.getElementById('record-button');
-        const modal = document.getElementById('modal');
-        const countdownEl = document.getElementById('countdown');
-        const stopRecordingButton = document.getElementById('stop-recording');
-        const closeModalButton = document.getElementById('close-modal');
-        let mediaRecorder;
-        let recordedChunks = [];
-
+        // Start recording with countdown
         recordButton.addEventListener('click', () => {
+            errorMessage.textContent = '';
             modal.style.display = 'block';
             let count = 3;
             countdownEl.textContent = `Recording in ${count}...`;
@@ -208,49 +153,109 @@
             }, 1000);
         });
 
+        // Start recording function
         function startRecording() {
             navigator.mediaDevices.getUserMedia({ audio: true })
                 .then(stream => {
                     mediaRecorder = new MediaRecorder(stream);
                     mediaRecorder.start();
+                    audioChunks = [];
                     countdownEl.textContent = 'Recording...';
-                    stopRecordingButton.style.display = 'block';
+                    stopButton.style.display = 'block';
+                    mediaRecorder.ondataavailable = (event) => audioChunks.push(event.data);
+                    mediaRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        const audioURL = URL.createObjectURL(audioBlob);
+                        audioPlayback.src = audioURL;
+                        audioPlayback.addEventListener('canplay', () => {
+                            countdownEl.textContent = 'Playing recording...';
+                            drawSonogram(audioPlayback, document.getElementById('recording-sonogram'));
+                        }, { once: true });
+                        stopButton.style.display = 'none';
+                        closeModalButton.style.display = 'block';
+                    };
+                    // Auto-stop after 3 seconds
                     setTimeout(() => {
                         if (mediaRecorder.state === 'recording') {
                             mediaRecorder.stop();
                             stream.getTracks().forEach(track => track.stop());
                         }
                     }, 3000);
-                    mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
-                    mediaRecorder.onstop = () => {
-                        const blob = new Blob(recordedChunks, { type: 'audio/ogg; codecs=opus' });
-                        recordedChunks = [];
-                        const audioURL = URL.createObjectURL(blob);
-                        const audio = new Audio(audioURL);
-                        const canvas = document.getElementById('recording-sonogram');
-                        drawSonogram(audio, canvas);
-                        stopRecordingButton.style.display = 'none';
-                        closeModalButton.style.display = 'block';
-                    };
                 })
                 .catch(err => {
-                    countdownEl.textContent = 'Microphone access denied';
+                    countdownEl.textContent = '';
+                    errorMessage.textContent = 'Error: Microphone access denied. Please allow microphone access in your browser settings.';
                     closeModalButton.style.display = 'block';
+                    console.error('Microphone error:', err);
                 });
         }
 
-        stopRecordingButton.addEventListener('click', () => {
+        // Stop recording
+        stopButton.addEventListener('click', () => {
             if (mediaRecorder && mediaRecorder.state === 'recording') {
                 mediaRecorder.stop();
                 mediaRecorder.stream.getTracks().forEach(track => track.stop());
             }
         });
 
+        // Close modal
         closeModalButton.addEventListener('click', () => {
             modal.style.display = 'none';
             countdownEl.textContent = '';
             closeModalButton.style.display = 'none';
+            audioPlayback.pause();
+            audioPlayback.currentTime = 0;
         });
+
+        // Draw sonogram
+        function drawSonogram(audio, canvas) {
+            const audioContext = new AudioContext();
+            const source = audioContext.createMediaElementSource(audio);
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 2048;
+            source.connect(analyser);
+            analyser.connect(audioContext.destination);
+
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Float32Array(bufferLength);
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+
+            function draw() {
+                const animationId = requestAnimationFrame(draw);
+                analyser.getFloatFrequencyData(dataArray);
+
+                // Shift canvas content left
+                const imageData = ctx.getImageData(1, 0, width - 1, height);
+                ctx.putImageData(imageData, 0, 0);
+                ctx.fillStyle = 'gray';
+                ctx.fillRect(width - 1, 0, 1, height);
+
+                // Draw frequency data
+                for (let i = 0; i < height; i++) {
+                    const value = dataArray[Math.floor(i * bufferLength / height)];
+                    const percent = (value + 80) / 80; // Adjusted for voice sensitivity
+                    const intensity = Math.min(Math.max(percent, 0), 1) * 255;
+                    ctx.fillStyle = `rgb(${intensity}, ${intensity / 2}, 0)`;
+                    ctx.fillRect(width - 1, height - i - 1, 1, 1);
+                }
+
+                // Debug frequency data
+                console.log('Frequency data:', dataArray);
+
+                // Stop drawing when audio ends
+                if (audio.ended) {
+                    cancelAnimationFrame(animationId);
+                }
+            }
+
+            audio.play().catch(err => {
+                errorMessage.textContent = 'Error playing audio: ' + err.message;
+                console.error('Audio playback error:', err);
+            });
+            draw();
+        }
     </script>
 </body>
 </html>
